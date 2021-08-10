@@ -1,0 +1,142 @@
+#!/usr/bin/python
+# -*- coding: utf-8 -*-
+
+import argparse
+import mechanize
+import re
+import smtplib
+import ConfigParser
+from datetime import datetime, date
+from email.mime.text import MIMEText
+
+from bs4 import BeautifulSoup
+
+
+def printDebug(level, text):
+    if args.debug >= level:
+        print text
+
+
+def isLoginForm(form):
+    return form.attrs.get("id") == 'frmLoginHeader'
+
+
+def process(url, borrowerId, pin, email):
+    browser = mechanize.Browser()
+    browser.set_handle_robots(False)
+    browser.set_handle_redirect(True)
+    browser.set_debug_http(args.debug >= 2)
+    browser.set_debug_redirects(args.debug >= 2)
+    browser.set_debug_responses(args.debug >= 2)
+
+    printDebug(1, '***** OPEN')
+    response = browser.open(url).read()
+    printDebug(3, response)
+
+    browser.set_handle_refresh(mechanize._http.HTTPRefreshProcessor(), max_time = 1, honor_time = True)
+
+    printDebug(1, '***** LOGIN')
+    browser.select_form(predicate = isLoginForm)
+    printDebug(1, "***** FORM")
+    printDebug(2, browser.form)
+    browser.set_value(borrowerId, name = 'BRWLID')
+    browser.set_value(pin, name = 'BRWLPWD')
+    response = browser.submit().read()
+    printDebug(3, response)
+
+    printDebug(1, '***** My Account')
+    browser.follow_link(text = 'My Account')
+
+    printDebug(1, '***** Current Loans')
+    response = browser.follow_link(text = 'Current loans').read()
+    printDebug(3, response);
+
+    foundForm = False
+
+    soup = BeautifulSoup(response, 'lxml')
+    today = None
+    renew = args.renew
+    for row in soup.find_all('tr'):
+        if today == None:
+            # The first row is the header so we can ignore it.
+            today = date.today()
+            continue
+        printDebug(4, 'date = ' + row.contents[2].get_text())
+        renewDate = datetime.strptime(row.contents[2].get_text(), '%d %b %Y')
+        if renewDate.date() <= today:
+            printDebug(4, row.contents[1].get_text() + ' date = ' + row.contents[2].get_text() + ' renewed = ' + row.contents[3].get_text())
+            renew = True
+
+    if renew:
+        printDebug(1, '***** RENEW ALL')
+
+        for form in browser.forms():
+            printDebug(1, '***** FORM')
+            printDebug(2, form)
+            try:
+                form.find_control(name = 'RFN]RNWALL')
+                foundForm = True
+                break
+            except mechanize._form.ControlNotFoundError:
+                printDebug(1, '**** NO')
+                continue
+            except mechanize._form.AmbiguityError:
+                foundForm = True
+                break
+
+        if foundForm:
+            printDebug(1, '***** SUBMIT')
+            browser.form = form
+            response = browser.submit(name = 'RFN]RNWALL').read()
+            printDebug(3, response)
+
+    printDebug(1, '***** CLOSE')
+    browser.close()
+
+    if email and (renew or args.report):
+        text = "<table>\n"
+        soup = BeautifulSoup(response, 'lxml')
+        header = True
+        for row in soup.find_all('tr'):
+            if header:
+                header = False
+                text += "<tr>\n"
+                for field in row.contents:
+                    text += '<th align="left">' + re.sub(r'[^\s\w]+', '', field.get_text()) + "</th>\n"
+                text += "</tr>\n"
+            else:
+                text += "<tr>\n"
+                for field in row.contents:
+                    text += '<td>' + field.get_text() + "</td>\n"
+                text += "</tr>\n"
+        text += "</table>\n"
+
+        msg = MIMEText(text, 'html', 'utf-8')
+        msg['Subject'] = 'Library loans'
+        msg['From'] = 'Library Monster <noreply@eris-associates.co.uk>'
+        msg['To'] = email
+
+        s = smtplib.SMTP('localhost')
+        s.sendmail(msg['From'], [email], msg.as_string())
+        s.quit()
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description = 'Manage renewals')
+    parser.add_argument('config', nargs = '+',
+        help = 'Specify the config files to use (default /etc/spydus.conf)')
+    parser.add_argument('-d', '--debug', action = 'count',
+        help = 'Enable debug output (repeat for increased debugging)')
+    parser.add_argument('--renew', action = 'store_true', default = False,
+        help = 'Renew current loans regardless of the due date')
+    parser.add_argument('--report', action = 'store_true', default = False,
+        help = 'Report due dates for current loans')
+    args = parser.parse_args()
+
+    for configPath in args.config:
+        config = ConfigParser.ConfigParser()
+        printDebug(1, '***** CONFIG ' + configPath)
+        config.read(configPath)
+
+        for section in config.sections():
+            process(config.get(section, 'url'), config.get(section, 'id'), config.get(section, 'pin'), config.get(section, 'email'))

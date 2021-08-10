@@ -1,0 +1,4 @@
+MAILTO=sysadmin
+SHELL=/bin/bash
+04 06 * * sun spydus /usr/local/bin/spydus --report /etc/spydus/*
+04 06 * * mon,tue,wed,thu,fri,sat /usr/local/bin/spydus /etc/spydus/*
