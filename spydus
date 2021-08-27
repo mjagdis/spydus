@@ -1,11 +1,11 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 # -*- coding: utf-8 -*-
 
 import argparse
 import mechanize
 import re
 import smtplib
-import ConfigParser
+import configparser
 from datetime import datetime, date
 from email.mime.text import MIMEText
 
@@ -13,25 +13,26 @@ from bs4 import BeautifulSoup
 
 
 def printDebug(level, text):
-    if args.debug >= level:
-        print text
+    if args.debug and args.debug >= level:
+        print(text)
 
 
 def isLoginForm(form):
-    return form.attrs.get("id") == 'frmLoginHeader'
+    return form.attrs.get("id") == 'frmLogin'
 
 
 def process(url, borrowerId, pin, email):
     browser = mechanize.Browser()
     browser.set_handle_robots(False)
     browser.set_handle_redirect(True)
-    browser.set_debug_http(args.debug >= 2)
-    browser.set_debug_redirects(args.debug >= 2)
-    browser.set_debug_responses(args.debug >= 2)
+    if args.debug and args.debug >= 2:
+        browser.set_debug_http(args.debug)
+        browser.set_debug_redirects(args.debug)
+        browser.set_debug_responses(args.debug)
 
     printDebug(1, '***** OPEN')
     response = browser.open(url).read()
-    printDebug(3, response)
+    printDebug(3, BeautifulSoup(response, 'lxml').prettify())
 
     browser.set_handle_refresh(mechanize._http.HTTPRefreshProcessor(), max_time = 1, honor_time = True)
 
@@ -42,74 +43,151 @@ def process(url, borrowerId, pin, email):
     browser.set_value(borrowerId, name = 'BRWLID')
     browser.set_value(pin, name = 'BRWLPWD')
     response = browser.submit().read()
-    printDebug(3, response)
+    printDebug(3, BeautifulSoup(response, 'lxml').prettify())
 
-    printDebug(1, '***** My Account')
-    browser.follow_link(text = 'My Account')
+    #printDebug(1, '***** My Account')
+    #browser.follow_link(text = 'My Account')
 
     printDebug(1, '***** Current Loans')
     response = browser.follow_link(text = 'Current loans').read()
-    printDebug(3, response);
+    printDebug(3, BeautifulSoup(response, 'lxml').prettify())
 
     foundForm = False
 
+    browser.select_form('frmSVL')
     soup = BeautifulSoup(response, 'lxml')
     today = None
-    renew = args.renew
+    renew = False
     for row in soup.find_all('tr'):
         if today == None:
             # The first row is the header so we can ignore it.
             today = date.today()
             continue
-        printDebug(4, 'date = ' + row.contents[2].get_text())
-        renewDate = datetime.strptime(row.contents[2].get_text(), '%d %b %Y')
+
+        itemnum = row.find(class_ = 'item-num').get_text()
+        title = row.find(class_ = 'card-title').get_text()
+        author = ''
+        for dblock in row.find(class_ = 'card-text').find_all(class_ = 'd-block'):
+            if len(author) > 0 and author[-1] != '-':
+                author += ' '
+            author += dblock.get_text()
+        due = row.find(attrs = { 'data-caption': 'Due' }).get_text()
+
+        # If there's no status the row td is empty and has no attrs
+        status = row.find(attrs = { 'data-caption': 'Status' })
+        if status:
+            status = status.get_text()
+        else:
+            status = ''
+
+        printDebug(4, 'itemnum = ' + itemnum)
+        printDebug(4, 'title = ' + title)
+        printDebug(4, 'author = ' + author)
+        printDebug(4, 'due = ' + due)
+        printDebug(4, 'status = ' + status)
+
+        renewDate = datetime.strptime(due, '%d %b %Y')
         if renewDate.date() <= today:
-            printDebug(4, row.contents[1].get_text() + ' date = ' + row.contents[2].get_text() + ' renewed = ' + row.contents[3].get_text())
+            printDebug(4, '***** Needs renewing ' + renewDate.strftime("%d %b %Y") + ' <= ' + today.strftime("%d %b %Y") + ', status: '+ status)
+            browser.find_control("SVL").items[int(itemnum) - 1].selected = True
+            #browser.find_control(id = "selCheck" + itemnum).selected = True
+            #browser.set_value(1, row.find(class_ = 'form-check-input')['id'])
             renew = True
 
-    if renew:
+    if args.renew:
         printDebug(1, '***** RENEW ALL')
 
-        for form in browser.forms():
-            printDebug(1, '***** FORM')
-            printDebug(2, form)
-            try:
-                form.find_control(name = 'RFN]RNWALL')
-                foundForm = True
-                break
-            except mechanize._form.ControlNotFoundError:
-                printDebug(1, '**** NO')
-                continue
-            except mechanize._form.AmbiguityError:
-                foundForm = True
-                break
+        action = browser.form.action
+        protocol = action[0:action.index(':')]
+        host = action[len(protocol) + 3:]
+        host = host[0: host.index('/')]
 
-        if foundForm:
-            printDebug(1, '***** SUBMIT')
-            browser.form = form
-            response = browser.submit(name = 'RFN]RNWALL').read()
-            printDebug(3, response)
+        button = soup.find('a', text = 'Renew all')
+        action = button['onclick']
+        action = action[29:]
+        action = action[0:action.index("'")]
+
+        browser.form.action = protocol + '://' + host + action
+        response = browser.submit();
+
+        printDebug(3, '----- result')
+        printDebug(3, BeautifulSoup(response, 'lxml').prettify())
+
+        response = browser.follow_link(text = 'Current loans').read()
+    elif renew:
+        printDebug(1, '***** RENEW SELECTED')
+
+        action = browser.form.action
+        protocol = action[0:action.index(':')]
+        host = action[len(protocol) + 3:]
+        host = host[0: host.index('/')]
+
+        button = soup.find('a', text = 'Renew selections')
+        action = button['onclick']
+        action = action[29:]
+        action = action[0:action.index("'")]
+
+        browser.form.action = protocol + '://' + host + action
+        response = browser.submit();
+
+        printDebug(3, '----- result')
+        printDebug(3, BeautifulSoup(response, 'lxml').prettify())
+
+        response = browser.follow_link(text = 'Current loans').read()
 
     printDebug(1, '***** CLOSE')
     browser.close()
 
     if email and (renew or args.report):
-        text = "<table>\n"
+        text = "<html>\n<head><title>Library Monster Report</title>\n"
+        text += "<style type=\"text/css\">\n"
+        text += "    tr.head { background: #cccccc; border: 0; padding 0; margin: 0; }\n"
+        text += "    tr.odd { background: #eeeeee; border: 0; padding 0; margin: 0; }\n"
+        text += "    tr.even { background: #ffffff; border: 0; padding 0; margin: 0; }\n"
+        text += "    td { vertical-align: top; }\n"
+        text += "</style></head><body>\n"
+        text += "<table width=\"100%\" border=\"0\" cellspacing=\"0\" cellpading=\"0\">\n"
+
         soup = BeautifulSoup(response, 'lxml')
         header = True
+        oddeven = False;
         for row in soup.find_all('tr'):
             if header:
                 header = False
-                text += "<tr>\n"
+                text += "<tr class=\"head\">\n"
                 for field in row.contents:
-                    text += '<th align="left">' + re.sub(r'[^\s\w]+', '', field.get_text()) + "</th>\n"
+                    if field.get_text() != '':
+                        text += '<th align="left">' + re.sub(r'[^\s\w]+', '', field.get_text()) + "</th>\n"
                 text += "</tr>\n"
             else:
-                text += "<tr>\n"
-                for field in row.contents:
-                    text += '<td>' + field.get_text() + "</td>\n"
+                if oddeven:
+                    text += "<tr class=\"odd\">\n"
+                else:
+                    text += "<tr class=\"even\">\n"
+                oddeven = not oddeven
+
+                for col in row.contents:
+                    if 'class' in col.attrs and 'col-image' in col['class']:
+                        continue
+                    text += '    <td>'
+                    for elem in col.contents:
+                        #printDebug(4, "*** USE: " + str(elem))
+                        if elem.name == 'span':
+                            #printDebug(4, "*** SPAN: " + str(elem))
+                            text += elem.get_text()
+                        else:
+                            for span in elem.find_all('span'):
+                                if 'class' in span.attrs:
+                                    #printDebug(4, "*** SPAN: " + str(span))
+                                    if text[-1] != '-':
+                                        text += ' '
+                                    text += span.get_text()
+                            text += '<br/>'
+                    text += "</td>\n"
                 text += "</tr>\n"
-        text += "</table>\n"
+
+        text += "</table></body></html>\n"
+        printDebug(4, text)
 
         msg = MIMEText(text, 'html', 'utf-8')
         msg['Subject'] = 'Library loans'
@@ -134,7 +212,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     for configPath in args.config:
-        config = ConfigParser.ConfigParser()
+        config = configparser.ConfigParser()
         printDebug(1, '***** CONFIG ' + configPath)
         config.read(configPath)
 
