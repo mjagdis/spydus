@@ -1,0 +1,4 @@
+MAILTO=sysadmin
+SHELL=/bin/bash
+04 06 * * sun                     spydus for f in /etc/spydus/*; do /usr/local/bin/spydus -ddddd --report "$f" > /tmp/spydus-"${f##*/}" 2>&1; done
+04 06 * * mon,tue,wed,thu,fri,sat spydus for f in /etc/spydus/*; do /usr/local/bin/spydus -ddddd "$f" > /tmp/spydus-"${f##*/}" 2>&1; done

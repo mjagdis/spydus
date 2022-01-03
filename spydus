@@ -130,10 +130,10 @@ def process(url, borrowerId, pin, email):
         browser.form.action = protocol + '://' + host + action
         response = browser.submit();
 
-        printDebug(3, '----- result')
-        printDebug(3, BeautifulSoup(response, 'lxml').prettify())
+        #printDebug(3, '----- result')
+        #printDebug(3, BeautifulSoup(response, 'lxml').prettify())
 
-        response = browser.follow_link(text = 'Current loans').read()
+        #response = browser.follow_link(text = 'Current loans').read()
 
     printDebug(1, '***** CLOSE')
     browser.close()
@@ -149,6 +149,8 @@ def process(url, borrowerId, pin, email):
         text += "<table width=\"100%\" border=\"0\" cellspacing=\"0\" cellpading=\"0\">\n"
 
         soup = BeautifulSoup(response, 'lxml')
+        printDebug(3, '----- status')
+        printDebug(3, soup.prettify())
         header = True
         oddeven = False;
         for row in soup.find_all('tr'):
